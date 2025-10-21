@@ -379,6 +379,55 @@ app.get('/market-caps', async (req, res) => {
     }
 });
 
+// Batch: curve liquidity reserve for many idol coin types
+// Usage:
+//  - GET /getcurveliquidityreserve-batch?coinType=<ID1>&coinType=<ID2>
+//  - GET /getcurveliquidityreserve-batch?coinTypes=<ID1>,<ID2>
+app.get('/getcurveliquidityreserve-batch', async (req, res) => {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const repeated = url.searchParams.getAll('coinType').filter(Boolean);
+        const csv = (url.searchParams.get('coinTypes') || '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        const coinTypes = Array.from(new Set([ ...repeated, ...csv ]));
+
+        if (coinTypes.length === 0) {
+            return res.status(400).json({ error: 'Missing coinType(s) in query parameters.' });
+        }
+
+        console.log("======================================================");
+        console.log(`[DO Droplet] Received batch request for curve liquidity reserve. Count: ${coinTypes.length}`);
+        console.log("------------------------------------------------------");
+
+        const MIST_PER_SUI = 1_000_000_000n;
+
+        const results = await Promise.all(
+            coinTypes.map(async (coinType) => {
+                try {
+                    const { rawReturn } = await suiBlockchainService.getCurveLiquidityReserveForIdol(coinType);
+                    const rawBytes = rawReturn?.[0]?.[0];
+                    if (!rawBytes) throw new Error('No return value');
+                    const buffer = Buffer.from(rawBytes);
+                    const rawLiquidityMist = buffer.readBigUInt64LE(0);
+                    const liquidity_sui = Number(rawLiquidityMist) / Number(MIST_PER_SUI);
+                    return { coinType, liquidity_sui };
+                } catch (err: any) {
+                    return { coinType, error: err?.message || 'Failed to fetch curve liquidity reserve' };
+                }
+            })
+        );
+
+        console.log(`[DO Droplet] SUCCESS: curve liquidity reserve batch completed for ${results.length} coin types.`);
+        console.log("======================================================");
+
+        res.status(200).json({ results });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message || 'Failed to fetch curve liquidity reserves (batch)' });
+    }
+});
+
 // Batch: holders + volume for many bonding curves
 // Usage:
 //  - GET /holders-volume-batch?bondingCurveId=<ID1>&bondingCurveId=<ID2>&limit=1000
