@@ -379,6 +379,60 @@ app.get('/market-caps', async (req, res) => {
     }
 });
 
+// Batch: holders + volume for many bonding curves
+// Usage:
+//  - GET /holders-volume-batch?bondingCurveId=<ID1>&bondingCurveId=<ID2>&limit=1000
+//  - GET /holders-volume-batch?bondingCurveIds=<ID1>,<ID2>&limit=1000
+app.get('/holders-volume-batch', async (req, res) => {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const repeated = url.searchParams.getAll('bondingCurveId').filter(Boolean);
+        const csv = (url.searchParams.get('bondingCurveIds') || '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        const bondingCurveIds = Array.from(new Set([ ...repeated, ...csv ]));
+
+        const limitParam = url.searchParams.get('limit');
+        const limit = limitParam ? parseInt(limitParam, 10) : 1000;
+
+        if (bondingCurveIds.length === 0) {
+            return res.status(400).json({ error: 'Missing bondingCurveId(s) in query parameters.' });
+        }
+
+        console.log("======================================================");
+        console.log(`[DO Droplet] Received batch request for holders+volume. Count: ${bondingCurveIds.length}, limit: ${limit}`);
+        console.log("------------------------------------------------------");
+
+        const results = await Promise.all(
+            bondingCurveIds.map(async (id) => {
+                try {
+                    const events = await suiBlockchainService.getTradeEvents(id, limit);
+                    const volume = suiBlockchainService.calculateVolume(events);
+                    const holders = suiBlockchainService.calculateHolders(events);
+                    return {
+                        bondingCurveId: id,
+                        volume,
+                        holders: {
+                            count: Object.keys(holders).length,
+                            wallets: holders,
+                        },
+                    };
+                } catch (err: any) {
+                    return { bondingCurveId: id, error: err?.message || 'Failed to compute for this bonding curve' };
+                }
+            })
+        );
+
+        console.log(`[DO Droplet] SUCCESS: holders+volume batch completed for ${results.length} curves.`);
+        console.log("======================================================");
+
+        res.status(200).json({ results });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message || 'Failed to compute batch holders+volume' });
+    }
+});
+
 
 const port = Number(env.PORT ?? '3000');
 
