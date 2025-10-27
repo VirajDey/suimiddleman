@@ -64,7 +64,12 @@ app.get('/marginal-price', async (req, res) => {
         const coinType = (req.query.coinType as string) || '';
         if (!coinType) return res.status(400).json({ error: 'Missing coinType query param' });
         const { price } = await suiBlockchainService.getMarginalPriceForIdol(coinType);
-        res.status(200).json({ coinType, price });
+
+        // Normalize to human-readable SUI price using the same factor as computeMarketCaps
+        const BONDING_CURVE_PRICE_FACTOR = 10_000;
+        const priceInSui = (parseFloat(price) / BONDING_CURVE_PRICE_FACTOR).toString();
+
+        res.status(200).json({ coinType, price: priceInSui, rawPrice: price });
     } catch (e: any) {
         res.status(500).json({ error: e.message || String(e) });
     }
