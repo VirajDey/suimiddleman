@@ -369,31 +369,29 @@ export class SuiBlockchainService {
      * @param limit - The maximum number of events to fetch.
      * @returns A promise that resolves to an array of trade events.
      */
-    async getTradeEvents(bondingCurveId?: string, limit: number = 100) {
+    async getTradeEvents(bondingCurveId: string, limit: number = 250): Promise<any[]> {
         if (!this.poolsPackageId) {
             throw new Error('POOLS_PACKAGE_ID is not configured for fetching trade events.');
         }
         const EVENT_TYPE = `${this.poolsPackageId}::${this.bcModule}::TradeEvent`;
 
         try {
-            const events = await this.client.queryEvents({
-                query: {
-                    MoveEventType: EVENT_TYPE
-                },
+            // FINAL FIX: Query for the event type directly. This is the most reliable method
+            // as it doesn't depend on which parent object was mutated. We will fetch all
+            // recent trade events and then filter them by bonding_curve_id in our code.
+            const eventsResponse = await this.client.queryEvents({
+                query: { MoveEventType: EVENT_TYPE },
                 limit: limit,
-                order: 'descending'
+                order: 'descending',
             });
 
-            const filteredEvents = bondingCurveId
-                ? events.data.filter(event => {
-                    const data = event.parsedJson as TradeEventData;
-                    return data.bonding_curve_id === bondingCurveId;
-                })
-                : events.data;
+            const tradeEvents = eventsResponse.data.filter(event =>
+                (event.parsedJson as any)?.bonding_curve_id === bondingCurveId
+            );
 
-            return filteredEvents;
+            return tradeEvents;
         } catch (error) {
-            console.error('Error fetching events:', error);
+            console.error(`Error fetching trade events for ${bondingCurveId}:`, error);
             return [];
         }
     }
@@ -817,7 +815,7 @@ module ${moduleName}::${moduleName} {
      * @returns A map of trader addresses to their net token balances.
      */
     calculateHolders(events: any[]): { [trader: string]: number } {
-        const balances: { [trader: string]: number } = {};
+        const balances: { [trader: string]: bigint } = {};
 
         const reversedEvents = [...events].reverse();
 
@@ -826,20 +824,27 @@ module ${moduleName}::${moduleName} {
             const trader = data.trader;
 
             if (!balances[trader]) {
-                balances[trader] = 0;
+                balances[trader] = 0n;
             }
 
-            if (data.is_buy) {
-                balances[trader] += parseInt(data.y_amount);
-            } else {
-                balances[trader] -= parseInt(data.y_amount);
+            try {
+                if (data.is_buy) {
+                    // For a BUY, the user receives CoinY (IDOL), amount is in y_amount
+                    balances[trader] += BigInt(data.y_amount);
+                } else {
+                    // For a SELL, the user sends CoinY (IDOL), amount is in x_amount
+                    balances[trader] -= BigInt(data.x_amount);
+                }
+            } catch (e) {
+                console.error(`[Holders] Failed to parse amount for trader ${trader}:`, e);
             }
         });
 
         const holders: { [trader: string]: number } = {};
         for (const trader in balances) {
-            if (balances[trader] > 0) {
-                holders[trader] = balances[trader];
+            if (balances[trader] > 0n) {
+                // Convert BigInt to Number for the final output. This is generally safe for display purposes.
+                holders[trader] = Number(balances[trader]);
             }
         }
 
