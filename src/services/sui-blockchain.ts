@@ -1,3 +1,5 @@
+//--- File: middleman/src/services/sui-blockchain.ts ---
+
 import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction } from '@mysten/sui/transactions';
@@ -327,36 +329,42 @@ export class SuiBlockchainService {
             signer: this.keypair,
             transaction: tx,
             requestType: 'WaitForLocalExecution',
-            options: { showObjectChanges: true, showEffects: true },
+            options: { showObjectChanges: true, showEffects: true, showEvents: true },
         });
 
         await this.client.waitForTransaction({
             digest: result.digest,
-            options: { showEffects: true, showObjectChanges: true },
+            options: { showEffects: true, showObjectChanges: true, showEvents: true },
         });
+
+        console.log('[SUI Service] Full transaction result for launch_idol:', JSON.stringify(result, null, 2));
 
         const createdObjects = result.objectChanges?.filter((o) => o.type === 'created');
         const lpCap = createdObjects?.find((o) => o.objectType.includes('::iao::LPCap'));
         const creatorTokens = createdObjects?.find((o) => o.objectType.includes('::coin::Coin'));
         const poolObject = createdObjects?.find((o) => o.objectType.includes('::iao::IAO'));
-        const bondingCurveObject = createdObjects?.find((o) => o.objectType.includes('::bonding_curve::BondingCurve'));
-
 
         if (!poolObject || !('objectId' in poolObject)) {
-            console.error('[SUI Service] Failed to find Pool object in transaction results:', result);
+            console.error('[SUI Service] Failed to find Pool object (IAO) in transaction results:', result);
             throw new Error('Failed to find Pool object after asset registration.');
         }
 
-        if (!bondingCurveObject || !('objectId' in bondingCurveObject)) {
-            console.error('[SUI Service] Failed to find Bonding Curve object in transaction results:', result);
-            throw new Error('Failed to find Bonding Curve object after asset registration.');
+        // --- CORRECT METHOD: Find the BondingCurve ID from the event ---
+        const events = (result as any).events || [];
+        const bondingCurveCreateEvent = events.find((e: any) => e.type.endsWith('::bonding_curve::BondingCurveCreateEvent'));
+        
+        if (!bondingCurveCreateEvent || !bondingCurveCreateEvent.parsedJson?.curve_id) {
+            console.error('[SUI Service] CRITICAL: Could not find BondingCurveCreateEvent or curve_id in the transaction events. This means the bonding curve ID cannot be reliably determined.', JSON.stringify(events, null, 2));
+            throw new Error('Failed to find Bonding Curve object ID from transaction events.');
         }
 
+        const bondingCurveId = bondingCurveCreateEvent.parsedJson.curve_id;
+        console.log(`[SUI Service] Successfully extracted correct BondingCurve ID from event: ${bondingCurveId}`);
 
         return {
             digest: result.digest,
             poolId: (poolObject as any).objectId,
-            bondingCurveId: (bondingCurveObject as any).objectId,
+            bondingCurveId: bondingCurveId,
             lpCapId: lpCap && 'objectId' in (lpCap as any) ? (lpCap as any).objectId : undefined,
             creatorTokensId:
                 creatorTokens && 'objectId' in (creatorTokens as any) ? (creatorTokens as any).objectId : undefined,
@@ -369,31 +377,29 @@ export class SuiBlockchainService {
      * @param limit - The maximum number of events to fetch.
      * @returns A promise that resolves to an array of trade events.
      */
-    async getTradeEvents(bondingCurveId?: string, limit: number = 100) {
+    async getTradeEvents(bondingCurveId: string, limit: number = 250): Promise<any[]> {
         if (!this.poolsPackageId) {
             throw new Error('POOLS_PACKAGE_ID is not configured for fetching trade events.');
         }
         const EVENT_TYPE = `${this.poolsPackageId}::${this.bcModule}::TradeEvent`;
 
         try {
-            const events = await this.client.queryEvents({
-                query: {
-                    MoveEventType: EVENT_TYPE
-                },
+            // FINAL FIX: Query for the event type directly. This is the most reliable method
+            // as it doesn't depend on which parent object was mutated. We will fetch all
+            // recent trade events and then filter them by bonding_curve_id in our code.
+            const eventsResponse = await this.client.queryEvents({
+                query: { MoveEventType: EVENT_TYPE },
                 limit: limit,
-                order: 'descending'
+                order: 'descending',
             });
 
-            const filteredEvents = bondingCurveId
-                ? events.data.filter(event => {
-                    const data = event.parsedJson as TradeEventData;
-                    return data.bonding_curve_id === bondingCurveId;
-                })
-                : events.data;
+            const tradeEvents = eventsResponse.data.filter(event =>
+                (event.parsedJson as any)?.bonding_curve_id === bondingCurveId
+            );
 
-            return filteredEvents;
+            return tradeEvents;
         } catch (error) {
-            console.error('Error fetching events:', error);
+            console.error(`Error fetching trade events for ${bondingCurveId}:`, error);
             return [];
         }
     }
@@ -817,7 +823,7 @@ module ${moduleName}::${moduleName} {
      * @returns A map of trader addresses to their net token balances.
      */
     calculateHolders(events: any[]): { [trader: string]: number } {
-        const balances: { [trader: string]: number } = {};
+        const balances: { [trader: string]: bigint } = {};
 
         const reversedEvents = [...events].reverse();
 
@@ -826,20 +832,27 @@ module ${moduleName}::${moduleName} {
             const trader = data.trader;
 
             if (!balances[trader]) {
-                balances[trader] = 0;
+                balances[trader] = 0n;
             }
 
-            if (data.is_buy) {
-                balances[trader] += parseInt(data.y_amount);
-            } else {
-                balances[trader] -= parseInt(data.y_amount);
+            try {
+                if (data.is_buy) {
+                    // For a BUY, the user receives CoinY (IDOL), amount is in y_amount
+                    balances[trader] += BigInt(data.y_amount);
+                } else {
+                    // For a SELL, the user sends CoinY (IDOL), amount is in x_amount
+                    balances[trader] -= BigInt(data.x_amount);
+                }
+            } catch (e) {
+                console.error(`[Holders] Failed to parse amount for trader ${trader}:`, e);
             }
         });
 
         const holders: { [trader: string]: number } = {};
         for (const trader in balances) {
-            if (balances[trader] > 0) {
-                holders[trader] = balances[trader];
+            if (balances[trader] > 0n) {
+                // Convert BigInt to Number for the final output. This is generally safe for display purposes.
+                holders[trader] = Number(balances[trader]);
             }
         }
 
