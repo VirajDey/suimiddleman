@@ -1,3 +1,5 @@
+//--- File: middleman/src/server.ts ---
+
 import express from 'express';
 import cors from 'cors';
 import { config as dotenvConfig } from 'dotenv';
@@ -153,20 +155,23 @@ app.post('/graduate-idol', async (req, res) => {
 
     try {
         const result = await suiBlockchainService.graduateIdol(idolCoinType, idolCoinMetadataId);
-        
+
         console.log(`[DO Droplet] SUCCESS: Idol graduated. Digest: ${result.digest}`);
         console.log("======================================================");
-        
+
         res.status(200).json({
             message: 'Idol successfully graduated into a Cetus CLMM pool.',
             digest: result.digest,
+            events: result.events,
         });
     } catch (error: any) {
         console.error(`[DO Droplet] FATAL ERROR graduating idol:`, error);
         console.log("======================================================");
         res.status(500).json({
             error: 'Failed to graduate idol on SUI blockchain',
-            details: error.message,
+            details: error.message.includes('Balance of gas object')
+                ? 'Insufficient gas in the server wallet to perform the graduation transaction.'
+                : error.message,
         });
     }
 });
@@ -184,10 +189,10 @@ app.post('/check-update-level', async (req, res) => {
 
     try {
         const result = await suiBlockchainService.checkAndUpdateLevel(idolCoinType);
-        
+
         console.log(`[DO Droplet] SUCCESS: check_and_update_level executed. Transaction digest: ${result.digest}`);
         console.log("======================================================");
-        
+
         res.status(200).json({
             message: 'Successfully executed check_and_update_level.',
             digest: result.digest,
@@ -203,132 +208,105 @@ app.post('/check-update-level', async (req, res) => {
     }
 });
 
-app.get('/volume', async (req, res) => {
-    const { bondingCurveId, limit } = req.query;
-
-    console.log("======================================================");
-    console.log(`[DO Droplet] Received request for trade volume.`);
-    if (bondingCurveId) {
-        console.log(`[DO Droplet] Filtering for Bonding Curve ID: ${bondingCurveId}`);
-    }
-    console.log("------------------------------------------------------");
-
+async function getStatsForBondingCurve(bondingCurveId: string, limit: number = 1000) {
     try {
-        const events = await suiBlockchainService.getTradeEvents(
-            bondingCurveId as string | undefined,
-            limit ? parseInt(limit as string, 10) : 100
-        );
-        
+        const events = await suiBlockchainService.getTradeEvents(bondingCurveId, limit);
+        console.log(`[Middleman] Found ${events.length} trade events for bondingCurveId: ${bondingCurveId}`);
+        if (events.length > 0) console.log('[Middleman] Raw SUI Events:', JSON.stringify(events, null, 2));
         const volumeData = suiBlockchainService.calculateVolume(events);
-        
-        console.log(`[DO Droplet] SUCCESS: Volume calculation complete. Transactions found: ${volumeData.transactionCount}`);
-        console.log("======================================================");
-
-        res.status(200).json({
-            bondingCurveId: bondingCurveId || 'all',
-            ...volumeData
-        });
-
-    } catch (error: any) {
-        console.error(`[DO Droplet] FATAL ERROR fetching volume:`, error);
-        console.log("======================================================");
-        res.status(500).json({
-            error: 'Failed to fetch and calculate volume',
-            details: error.message,
-        });
-    }
-});
-
-app.get('/holders', async (req, res) => {
-    const { bondingCurveId, limit } = req.query;
-
-    console.log("======================================================");
-    console.log(`[DO Droplet] Received request for token holders.`);
-    if (bondingCurveId) {
-        console.log(`[DO Droplet] Filtering for Bonding Curve ID: ${bondingCurveId}`);
-    }
-    console.log("------------------------------------------------------");
-
-    try {
-        const events = await suiBlockchainService.getTradeEvents(
-            bondingCurveId as string | undefined,
-            limit ? parseInt(limit as string, 10) : 1000
-        );
-        
         const holdersData = suiBlockchainService.calculateHolders(events);
-        
-        console.log(`[DO Droplet] SUCCESS: Holder calculation complete. Holders found: ${Object.keys(holdersData).length}`);
-        console.log("======================================================");
+        console.log(`[Middleman] Calculated Volume Data:`, volumeData);
 
-        res.status(200).json({
-            bondingCurveId: bondingCurveId || 'all',
-            holderCount: Object.keys(holdersData).length,
-            holders: holdersData
-        });
-
-    } catch (error: any) {
-        console.error(`[DO Droplet] FATAL ERROR fetching holders:`, error);
-        console.log("======================================================");
-        res.status(500).json({
-            error: 'Failed to fetch and calculate holders',
-            details: error.message,
-        });
-    }
-});
-
-app.get('/holders-volume', async (req, res) => {
-    const { bondingCurveId, limit } = req.query;
-
-    if (!bondingCurveId) {
-        return res.status(400).json({ error: 'Missing bondingCurveId query parameter.' });
-    }
-
-    console.log("======================================================");
-    console.log(`[DO Droplet] Received request for stats for Bonding Curve ID: ${bondingCurveId}`);
-    console.log("------------------------------------------------------");
-
-    try {
-        const events = await suiBlockchainService.getTradeEvents(
-            bondingCurveId as string,
-            limit ? parseInt(limit as string, 10) : 1000
-        );
-        
-        const volumeData = suiBlockchainService.calculateVolume(events);
-        
-        const holdersData = suiBlockchainService.calculateHolders(events);
-        
-        console.log(`[DO Droplet] SUCCESS: Stats calculation complete. Transactions: ${volumeData.transactionCount}, Holders: ${Object.keys(holdersData).length}`);
-        console.log("======================================================");
-
-        res.status(200).json({
+        return {
             bondingCurveId,
             volume: volumeData,
             holders: {
                 count: Object.keys(holdersData).length,
                 wallets: holdersData,
             }
-        });
+        };
+    } catch (error: any) {
+        console.error(`[DO Droplet] ERROR fetching stats for bonding curve ${bondingCurveId}:`, error);
+        return {
+            bondingCurveId,
+            volume: null,
+            holders: { count: 0, wallets: {} },
+            error: error.message || 'Failed to fetch and calculate stats for the bonding curve'
+        };
+    }
+}
+
+app.get('/holders-volume', async (req, res) => {
+    const { bondingCurveId, limit } = req.query;
+
+    if (!bondingCurveId || typeof bondingCurveId !== 'string') {
+        return res.status(400).json({ error: 'A single bondingCurveId query parameter is required.' });
+    }
+
+    console.log("======================================================");
+    console.log(`[DO Droplet] Received request for stats for Bonding Curve ID: ${bondingCurveId}`);
+    console.log("------------------------------------------------------");
+
+    const result = await getStatsForBondingCurve(bondingCurveId, limit ? parseInt(limit as string, 10) : 1000);
+
+    if (result.error) {
+        console.log("======================================================");
+        res.status(500).json(result);
+    } else {
+        console.log(`[DO Droplet] SUCCESS: Stats calculation complete. Transactions: ${result.volume!.transactionCount}, Holders: ${result.holders.count}`);
+        console.log("======================================================");
+        res.status(200).json(result);
+    }
+});
+
+app.get('/holders-volume-batch', async (req, res) => {
+    const { bondingCurveId: bondingCurveIdsQuery } = req.query;
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 1000;
+
+    let bondingCurveIds: string[] = [];
+    if (Array.isArray(bondingCurveIdsQuery)) {
+        bondingCurveIds = bondingCurveIdsQuery.filter((id): id is string => typeof id === 'string');
+    } else if (typeof bondingCurveIdsQuery === 'string') {
+        bondingCurveIds = [bondingCurveIdsQuery];
+    }
+
+    if (bondingCurveIds.length === 0) {
+        return res.status(400).json({ error: 'Missing or invalid bondingCurveId query parameter(s).' });
+    }
+    const validIds = bondingCurveIds.filter(id => id.trim() !== '');
+
+    console.log("======================================================");
+    console.log(`[DO Droplet] Received batch request for stats for ${validIds.length} Bonding Curve IDs.`);
+    console.log("------------------------------------------------------");
+
+    try {
+        const promises = validIds.map(id => getStatsForBondingCurve(id, limit));
+        const results = await Promise.all(promises);
+
+        console.log(`[DO Droplet] SUCCESS: Batch stats calculation complete.`);
+        console.log("======================================================");
+
+        res.status(200).json({ results });
 
     } catch (error: any) {
-        console.error(`[DO Droplet] FATAL ERROR fetching stats for bonding curve ${bondingCurveId}:`, error);
+        console.error(`[DO Droplet] FATAL ERROR fetching batch stats:`, error);
         console.log("======================================================");
         res.status(500).json({
-            error: 'Failed to fetch and calculate stats for the bonding curve',
+            error: 'Failed to fetch and calculate batch stats',
             details: error.message,
         });
     }
 });
 
-
 app.get('/getcurveliquidityreserve', async (req, res) => {
     try {
         const coinType = (req.query.coinType as string) || '';
         if (!coinType) return res.status(400).json({ error: 'Missing coinType query param' });
-        
+
         const { rawReturn } = await suiBlockchainService.getCurveLiquidityReserveForIdol(coinType);
 
         const rawBytes = rawReturn[0][0];
-        
+
         const buffer = Buffer.from(rawBytes);
         const rawLiquidityMist = buffer.readBigUInt64LE(0);
 
@@ -366,119 +344,16 @@ app.get('/market-caps', async (req, res) => {
         const url = new URL(req.url, `http://${req.headers.host}`);
         const repeated = url.searchParams.getAll('coinType').filter(Boolean);
         const csv = (url.searchParams.get('coinTypes') || '').split(',').map(s => s.trim()).filter(Boolean);
-        const coinTypes = Array.from(new Set([ ...repeated, ...csv ]));
+        const coinTypes = Array.from(new Set([...repeated, ...csv]));
 
         if (coinTypes.length === 0) {
             return res.status(400).json({ error: 'Missing coinType(s) in query parameters.' });
         }
-        
+
         const results = await suiBlockchainService.computeMarketCaps(coinTypes);
         res.status(200).json({ results });
     } catch (e: any) {
         res.status(500).json({ error: e.message || 'Failed to compute market caps' });
-    }
-});
-
-// Batch: curve liquidity reserve for many idol coin types
-// Usage:
-//  - GET /getcurveliquidityreserve-batch?coinType=<ID1>&coinType=<ID2>
-//  - GET /getcurveliquidityreserve-batch?coinTypes=<ID1>,<ID2>
-app.get('/getcurveliquidityreserve-batch', async (req, res) => {
-    try {
-        const url = new URL(req.url, `http://${req.headers.host}`);
-        const repeated = url.searchParams.getAll('coinType').filter(Boolean);
-        const csv = (url.searchParams.get('coinTypes') || '')
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean);
-        const coinTypes = Array.from(new Set([ ...repeated, ...csv ]));
-
-        if (coinTypes.length === 0) {
-            return res.status(400).json({ error: 'Missing coinType(s) in query parameters.' });
-        }
-
-        console.log("======================================================");
-        console.log(`[DO Droplet] Received batch request for curve liquidity reserve. Count: ${coinTypes.length}`);
-        console.log("------------------------------------------------------");
-
-        const MIST_PER_SUI = 1_000_000_000n;
-
-        const results = await Promise.all(
-            coinTypes.map(async (coinType) => {
-                try {
-                    const { rawReturn } = await suiBlockchainService.getCurveLiquidityReserveForIdol(coinType);
-                    const rawBytes = rawReturn?.[0]?.[0];
-                    if (!rawBytes) throw new Error('No return value');
-                    const buffer = Buffer.from(rawBytes);
-                    const rawLiquidityMist = buffer.readBigUInt64LE(0);
-                    const liquidity_sui = Number(rawLiquidityMist) / Number(MIST_PER_SUI);
-                    return { coinType, liquidity_sui };
-                } catch (err: any) {
-                    return { coinType, error: err?.message || 'Failed to fetch curve liquidity reserve' };
-                }
-            })
-        );
-
-        console.log(`[DO Droplet] SUCCESS: curve liquidity reserve batch completed for ${results.length} coin types.`);
-        console.log("======================================================");
-
-        res.status(200).json({ results });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message || 'Failed to fetch curve liquidity reserves (batch)' });
-    }
-});
-
-// Batch: holders + volume for many bonding curves
-// Usage:
-//  - GET /holders-volume-batch?bondingCurveId=<ID1>&bondingCurveId=<ID2>&limit=1000
-//  - GET /holders-volume-batch?bondingCurveIds=<ID1>,<ID2>&limit=1000
-app.get('/holders-volume-batch', async (req, res) => {
-    try {
-        const url = new URL(req.url, `http://${req.headers.host}`);
-        const repeated = url.searchParams.getAll('bondingCurveId').filter(Boolean);
-        const csv = (url.searchParams.get('bondingCurveIds') || '')
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean);
-        const bondingCurveIds = Array.from(new Set([ ...repeated, ...csv ]));
-
-        const limitParam = url.searchParams.get('limit');
-        const limit = limitParam ? parseInt(limitParam, 10) : 1000;
-
-        if (bondingCurveIds.length === 0) {
-            return res.status(400).json({ error: 'Missing bondingCurveId(s) in query parameters.' });
-        }
-
-        console.log("======================================================");
-        console.log(`[DO Droplet] Received batch request for holders+volume. Count: ${bondingCurveIds.length}, limit: ${limit}`);
-        console.log("------------------------------------------------------");
-
-        const results = await Promise.all(
-            bondingCurveIds.map(async (id) => {
-                try {
-                    const events = await suiBlockchainService.getTradeEvents(id, limit);
-                    const volume = suiBlockchainService.calculateVolume(events);
-                    const holders = suiBlockchainService.calculateHolders(events);
-                    return {
-                        bondingCurveId: id,
-                        volume,
-                        holders: {
-                            count: Object.keys(holders).length,
-                            wallets: holders,
-                        },
-                    };
-                } catch (err: any) {
-                    return { bondingCurveId: id, error: err?.message || 'Failed to compute for this bonding curve' };
-                }
-            })
-        );
-
-        console.log(`[DO Droplet] SUCCESS: holders+volume batch completed for ${results.length} curves.`);
-        console.log("======================================================");
-
-        res.status(200).json({ results });
-    } catch (e: any) {
-        res.status(500).json({ error: e.message || 'Failed to compute batch holders+volume' });
     }
 });
 

@@ -1,5 +1,3 @@
-//--- File: services/sui-blockchain.ts (Final Fixed) ---
-
 import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction } from '@mysten/sui/transactions';
@@ -486,11 +484,13 @@ export class SuiBlockchainService {
     async computeMarketCaps(coinTypes: string[]): Promise<IdolMarketCapResult[]> {
         const SUI_DECIMALS_FACTOR = 1_000_000_000; // 10^9
 
+        const BONDING_CURVE_PRICE_FACTOR = 10_000;
+
         const tasks = coinTypes.map(async (coinType) => {
             try {
                 // 1. Get the marginal price in SUI
                 const { price: priceString } = await this.getMarginalPriceForIdol(coinType);
-                const priceInSui = parseFloat(priceString) / SUI_DECIMALS_FACTOR;
+                const priceInSui = parseFloat(priceString) / BONDING_CURVE_PRICE_FACTOR;
 
                 // 2. Get the circulating supply
                 const { supply: supplyString } = await this.getCurrentSupplyForIdol(coinType);
@@ -502,11 +502,13 @@ export class SuiBlockchainService {
                 // 3. Calculate market cap in SUI
                 const marketCapInSui = priceInSui * circulatingSupply;
 
+                console.log(`[SuiBCService] PRICE_DEBUG for ${coinType}:`, { priceInSui, circulatingSupply, marketCapInSui });
+
                 return {
                     coinType,
-                    price: priceInSui.toFixed(9),
-                    circulatingSupply: circulatingSupply.toFixed(9),
-                    marketCap: marketCapInSui.toFixed(9)
+                    price: priceInSui.toString(),
+                    circulatingSupply: circulatingSupply.toString(),
+                    marketCap: marketCapInSui.toString()
                 };
             } catch (err: any) {
                 const message = err?.message || 'Failed to compute market cap';
@@ -653,7 +655,7 @@ export class SuiBlockchainService {
     async graduateIdol(
         idolCoinType: string,
         idolCoinMetadataId: string,
-    ): Promise<{ digest: string }> {
+    ): Promise<{ digest: string, events: any[] }> {
         if (!this.graduatorPackageId) {
             throw new Error('GRADUATOR_PACKAGE_ID is not configured in the environment.');
         }
@@ -692,12 +694,18 @@ export class SuiBlockchainService {
             signer: this.keypair,
             transaction: tx,
             requestType: 'WaitForLocalExecution',
-            options: { showEffects: true },
+            options: { showEffects: true, showEvents: true },
         });
 
-        await this.client.waitForTransaction({ digest: result.digest });
+        const finalResult = await this.client.waitForTransaction({
+            digest: result.digest,
+            options: { showEvents: true }
+        });
 
-        return { digest: result.digest };
+        return {
+            digest: finalResult.digest,
+            events: (finalResult as any).events ?? []
+        };
     }
 
     /**
