@@ -284,6 +284,8 @@ export class SuiBlockchainService {
 
         const countdown_ms = (createParams.countdownMinutes || 0) * 60 * 1000;
 
+        // --- MODIFICATION START ---
+        // The argument list now matches the updated factory::launch_idol function
         tx.moveCall({
             target: `${this.factoryPackageId}::factory::launch_idol`,
             typeArguments: [fullCoinType],
@@ -291,8 +293,8 @@ export class SuiBlockchainService {
                 tx.pure.string(createParams.name),
                 tx.pure.string(createParams.imageUrl || 'https://idol.fun/default-icon.png'),
                 tx.pure.u64(createParams.totalSupply),
-                tx.pure.u16(createParams.feeRateBps),
-                tx.pure.u64(countdown_ms),
+                tx.pure.u16(createParams.feeRateBps), // Correct argument
+                tx.pure.u64(countdown_ms),            // Correct argument
                 tx.object(idolToken.treasuryCapId),
                 tx.object(this.iaoConfigId),
                 tx.object(this.iaoRegistryId),
@@ -304,6 +306,7 @@ export class SuiBlockchainService {
                 tx.object(this.clockId),
             ],
         });
+        // --- MODIFICATION END ---
 
         tx.setGasBudget(100_000_000n);
 
