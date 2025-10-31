@@ -1,5 +1,3 @@
-//--- File: middleman/src/services/sui-blockchain.ts ---
-
 import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction } from '@mysten/sui/transactions';
@@ -284,6 +282,8 @@ export class SuiBlockchainService {
         const [initial_liquidity] = tx.splitCoins(tx.gas, [tx.pure.u64(1_000_000_000)]);
         const fullCoinType = idolToken.coinType;
 
+        const countdown_ms = (createParams.countdownMinutes || 0) * 60 * 1000;
+
         tx.moveCall({
             target: `${this.factoryPackageId}::factory::launch_idol`,
             typeArguments: [fullCoinType],
@@ -292,6 +292,7 @@ export class SuiBlockchainService {
                 tx.pure.string(createParams.imageUrl || 'https://idol.fun/default-icon.png'),
                 tx.pure.u64(createParams.totalSupply),
                 tx.pure.u16(createParams.feeRateBps),
+                tx.pure.u64(countdown_ms),
                 tx.object(idolToken.treasuryCapId),
                 tx.object(this.iaoConfigId),
                 tx.object(this.iaoRegistryId),
@@ -352,7 +353,7 @@ export class SuiBlockchainService {
         // --- CORRECT METHOD: Find the BondingCurve ID from the event ---
         const events = (result as any).events || [];
         const bondingCurveCreateEvent = events.find((e: any) => e.type.endsWith('::bonding_curve::BondingCurveCreateEvent'));
-        
+
         if (!bondingCurveCreateEvent || !bondingCurveCreateEvent.parsedJson?.curve_id) {
             console.error('[SUI Service] CRITICAL: Could not find BondingCurveCreateEvent or curve_id in the transaction events. This means the bonding curve ID cannot be reliably determined.', JSON.stringify(events, null, 2));
             throw new Error('Failed to find Bonding Curve object ID from transaction events.');
