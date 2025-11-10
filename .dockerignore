@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+.git/
+.gitignore
+*.log
+dist/
+build/
+.DS_Store
+*.deb
+yarn.lock
+pnpm-lock.yaml.bak
+
