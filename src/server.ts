@@ -1,3 +1,5 @@
+//--- File: middleman/src/server.ts ---
+
 import express from 'express';
 import cors from 'cors';
 import { config as dotenvConfig } from 'dotenv';
@@ -9,16 +11,6 @@ dotenvConfig();
 const app = express();
 app.use(express.json());
 app.use(cors());
-
-// --- ADD THIS SECTION ---
-let requestCounter = 0;
-
-// Middleware to count and log every incoming request
-app.use((req, res, next) => {
-    requestCounter++;
-    next(); // Pass control to the next handler
-});
-// --- END OF ADDED SECTION ---
 
 function parseNetwork(v: string | undefined): SuiNetwork {
     return (NETWORKS as readonly string[]).includes(v ?? '')
