@@ -311,7 +311,6 @@ export class SuiBlockchainService {
             throw new Error(`Invalid goalMetric provided: "${createParams.goalMetric}". Must be one of 'supply', 'reserve', or 'price'.`);
         }
 
-        // --- FIX: Convert goalValue to the correct on-chain raw unit for ALL metrics ---
         let goalValueForContract: string;
 
         switch (createParams.goalMetric) {
@@ -453,9 +452,6 @@ export class SuiBlockchainService {
         const EVENT_TYPE = `${this.poolsPackageId}::${this.bcModule}::TradeEvent`;
 
         try {
-            // FINAL FIX: Query for the event type directly. This is the most reliable method
-            // as it doesn't depend on which parent object was mutated. We will fetch all
-            // recent trade events and then filter them by bonding_curve_id in our code.
             const eventsResponse = await this.client.queryEvents({
                 query: { MoveEventType: EVENT_TYPE },
                 limit: limit,
