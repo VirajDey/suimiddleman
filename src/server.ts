@@ -1,5 +1,3 @@
-//--- File: middleman/src/server.ts ---
-
 import express from 'express';
 import cors from 'cors';
 import { config as dotenvConfig } from 'dotenv';
@@ -11,6 +9,16 @@ dotenvConfig();
 const app = express();
 app.use(express.json());
 app.use(cors());
+
+// --- ADD THIS SECTION ---
+let requestCounter = 0;
+
+// Middleware to count and log every incoming request
+app.use((req, res, next) => {
+    requestCounter++;
+    next(); // Pass control to the next handler
+});
+// --- END OF ADDED SECTION ---
 
 function parseNetwork(v: string | undefined): SuiNetwork {
     return (NETWORKS as readonly string[]).includes(v ?? '')
@@ -216,11 +224,8 @@ app.post('/check-update-level', async (req, res) => {
 async function getStatsForBondingCurve(bondingCurveId: string, limit: number = 1000) {
     try {
         const events = await suiBlockchainService.getTradeEvents(bondingCurveId, limit);
-        console.log(`[Middleman] Found ${events.length} trade events for bondingCurveId: ${bondingCurveId}`);
-        if (events.length > 0) console.log('[Middleman] Raw SUI Events:', JSON.stringify(events, null, 2));
         const volumeData = suiBlockchainService.calculateVolume(events);
         const holdersData = suiBlockchainService.calculateHolders(events);
-        console.log(`[Middleman] Calculated Volume Data:`, volumeData);
 
         return {
             bondingCurveId,
@@ -280,16 +285,9 @@ app.get('/holders-volume-batch', async (req, res) => {
     }
     const validIds = bondingCurveIds.filter(id => id.trim() !== '');
 
-    console.log("======================================================");
-    console.log(`[DO Droplet] Received batch request for stats for ${validIds.length} Bonding Curve IDs.`);
-    console.log("------------------------------------------------------");
-
     try {
         const promises = validIds.map(id => getStatsForBondingCurve(id, limit));
         const results = await Promise.all(promises);
-
-        console.log(`[DO Droplet] SUCCESS: Batch stats calculation complete.`);
-        console.log("======================================================");
 
         res.status(200).json({ results });
 
@@ -362,6 +360,30 @@ app.get('/market-caps', async (req, res) => {
     }
 });
 
+app.get('/level-status', async (req, res) => {
+    try {
+        const coinType = req.query.coinType as string;
+        if (!coinType) {
+            return res.status(400).json({ error: 'Missing coinType query parameter.' });
+        }
+
+        console.log("======================================================");
+        console.log(`[DO Droplet] Received request for level status for: ${coinType}`);
+        console.log("------------------------------------------------------");
+
+        const levelData = await suiBlockchainService.getBondingCurveLevelManager(coinType);
+
+        console.log(`[DO Droplet] SUCCESS: Fetched level data for ${coinType}.`);
+        console.log("======================================================");
+
+        res.status(200).json(levelData);
+
+    } catch (e: any) {
+        console.error(`[DO Droplet] FATAL ERROR fetching level status:`, e);
+        console.log("======================================================");
+        res.status(500).json({ error: e.message || String(e) });
+    }
+});
 
 const port = Number(env.PORT ?? '3000');
 
