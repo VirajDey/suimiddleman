@@ -411,7 +411,7 @@ export class SuiBlockchainService {
         const createdObjects = result.objectChanges?.filter((o) => o.type === 'created');
         const lpCap = createdObjects?.find((o) => o.objectType.includes('::iao::LPCap'));
         const creatorTokens = createdObjects?.find((o) => o.objectType.includes('::coin::Coin'));
-        const poolObject = createdObjects?.find((o) => o.objectType.endsWith('::iao::IAO'));
+        const poolObject = createdObjects?.find((o) => o.objectType.includes('::iao::IAO'));
 
         if (!poolObject || !('objectId' in poolObject)) {
             console.error('[SUI Service] Failed to find Pool object (IAO) in transaction results:', result);
