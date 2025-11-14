@@ -298,7 +298,7 @@ export class SuiBlockchainService {
 
         // --- Step 2: Build the transaction block ---
         const tx = new Transaction();
-        const [initial_liquidity] = tx.splitCoins(tx.gas, [tx.pure.u64(1_000_000_000)]);
+        const [initial_liquidity] = tx.splitCoins(tx.gas, [tx.pure.u64(150_000_000)]);
         const fullCoinType = idolToken.coinType;
 
         const metricTypeMap: { [key in IdolCreateRequest['goalMetric']]: number } = {
@@ -1073,3 +1073,4 @@ module ${moduleName}::${moduleName} {
     }
 
 }
+
