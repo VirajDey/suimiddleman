@@ -378,6 +378,34 @@ app.get('/curve-state', async (req, res) => {
     }
 });
 
+// Read-only: get curve state for a batch of idol coin types
+// Usage: GET /curve-state-batch?coinType=<ID1>&coinType=<ID2>
+app.get('/curve-state-batch', async (req, res) => {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const repeated = url.searchParams.getAll('coinType').filter(Boolean);
+        const csv = (url.searchParams.get('coinTypes') || '').split(',').map(s => s.trim()).filter(Boolean);
+        const coinTypes = Array.from(new Set([...repeated, ...csv]));
+
+        if (coinTypes.length === 0) {
+            return res.status(400).json({ error: 'Missing coinType(s) in query parameters.' });
+        }
+
+        const promises = coinTypes.map(async (coinType) => {
+            try {
+                const { state } = await suiBlockchainService.getCurveStateForIdol(coinType);
+                return { coinType, state };
+            } catch (e: any) {
+                return { coinType, error: e.message || String(e) };
+            }
+        });
+        const results = await Promise.all(promises);
+        res.status(200).json({ results });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message || 'Failed to fetch batch curve states' });
+    }
+});
+
 // Read-only: get market caps for a batch of idol coin types
 // Usage: GET /market-caps?coinType=<ID1>&coinType=<ID2>
 // Or:    GET /market-caps?coinTypes=<ID1>,<ID2>
